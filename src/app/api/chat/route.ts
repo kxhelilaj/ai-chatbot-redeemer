@@ -1,6 +1,6 @@
 // app/api/chat/route.ts
 import { NextRequest, NextResponse } from 'next/server';
-import { HNSWLib } from '@langchain/community/vectorstores/hnswlib';
+import { Chroma } from '@langchain/community/vectorstores/chroma';
 import { ChatOllama, OllamaEmbeddings } from '@langchain/ollama';
 import { RunnableSequence, RunnablePassthrough } from '@langchain/core/runnables';
 import { StringOutputParser } from '@langchain/core/output_parsers';
@@ -29,20 +29,19 @@ export async function POST(request: NextRequest) {
     }
 
     console.log(`Received question: "${question}"`);
-    console.log(`Attempting to load vector store from: ${VECTORSTORE_DIR}`);
-
+    console.log(`Loading Chroma vector store from: ${VECTORSTORE_DIR}`);
 
     const embeddings = new OllamaEmbeddings({
       model: "nomic-embed-text",
       baseUrl: process.env.OLLAMA_URL,
     });
 
-   
-    const vectorStore = await HNSWLib.load(VECTORSTORE_DIR, embeddings);
-  
-    const retriever = vectorStore.asRetriever({
-      k: 5,
+    const vectorStore = await Chroma.fromDocuments([], embeddings, {
+      collectionName: 'pdf-docs',
+      url: process.env.CHROMA_URL ?? "http://localhost:8000",
     });
+
+    const retriever = vectorStore.asRetriever({ k: 5 });
 
     const model = new ChatOllama({
       model: "mistral",
@@ -52,12 +51,10 @@ export async function POST(request: NextRequest) {
 
     const prompt = PromptTemplate.fromTemplate(TEMPLATE);
 
-    const formatDocs = (docs: Array<{ pageContent: string, metadata: unknown }>): string => {
+    const formatDocs = (docs: Array<{ pageContent: string }>): string => {
       if (!docs || docs.length === 0) {
-        console.log("No documents retrieved or found meeting similarity criteria.");
         return "No relevant context found in the documents for this question.";
       }
-      console.log(`Retrieved ${docs.length} documents for context.`);
       return docs.map(doc => doc.pageContent).join('\n\n---\n\n');
     };
 
@@ -72,22 +69,17 @@ export async function POST(request: NextRequest) {
     ]);
 
     console.log("Invoking RAG chain...");
-    const answer = await chain.invoke(question as string);
+    const answer = await chain.invoke(question);
     console.log("RAG chain finished. Sending response.");
 
     return NextResponse.json({ answer: answer.trim() });
 
   } catch (error: unknown) {
     console.error('Unhandled error in Chat API:', error);
-    let errorMessage = "An unexpected error occurred while processing your question.";
+    let message = "Unexpected error occurred.";
     if (error instanceof Error) {
-      errorMessage = error.message;
-      if (errorMessage.includes('ECONNREFUSED') || errorMessage.includes('fetch failed')) {
-        return NextResponse.json({ error: 'Failed to connect to Ollama. Please ensure Ollama is running and accessible at the configured URL.' }, { status: 503 });
-      }
-    } else {
-      errorMessage = String(error);
+      message = error.message;
     }
-    return NextResponse.json({ error: 'An unexpected error occurred.', details: errorMessage }, { status: 500 });
+    return NextResponse.json({ error: 'Unexpected error.', details: message }, { status: 500 });
   }
 }
