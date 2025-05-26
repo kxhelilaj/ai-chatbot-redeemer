@@ -5,9 +5,9 @@ import { ChatOllama, OllamaEmbeddings } from '@langchain/ollama';
 import { RunnableSequence, RunnablePassthrough } from '@langchain/core/runnables';
 import { StringOutputParser } from '@langchain/core/output_parsers';
 import { PromptTemplate } from '@langchain/core/prompts';
-import * as path from 'path';
+// import * as path from 'path';
 
-const VECTORSTORE_DIR = path.join(process.cwd(), 'vectorstore');
+// const VECTORSTORE_DIR = path.join(process.cwd(), 'vectorstore');
 
 const TEMPLATE = `
 You are a helpful assistant that STRICTLY answers questions based ONLY on the provided context.
@@ -28,8 +28,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Question is missing or invalid" }, { status: 400 });
     }
 
-    console.log(`Received question: "${question}"`);
-    console.log(`Loading Chroma vector store from: ${VECTORSTORE_DIR}`);
+    const isStore = question.toLowerCase().startsWith("store:");
+    const cleanedInput = question.replace(/^store:/i, '').trim();
 
     const embeddings = new OllamaEmbeddings({
       model: "nomic-embed-text",
@@ -38,8 +38,27 @@ export async function POST(request: NextRequest) {
 
     const vectorStore = await Chroma.fromDocuments([], embeddings, {
       collectionName: 'pdf-docs',
-      url: process.env.CHROMA_URL ?? "http://localhost:8000",
+      url: process.env.CHROMA_URL,
     });
+
+    if (isStore) {
+      if (!cleanedInput) {
+        return NextResponse.json({ error: "No content provided to store." }, { status: 400 });
+      }
+
+      const doc = [{
+        pageContent: cleanedInput,
+        metadata: {
+          source: "chat",
+          timestamp: Date.now(),
+        }
+      }];
+
+      await vectorStore.addDocuments(doc);
+      console.log("✅ Stored your input in the knowledge base.");
+
+      return NextResponse.json({ message: "✅ Stored your input in the knowledge base." });
+    }
 
     const retriever = vectorStore.asRetriever({ k: 5 });
 
@@ -76,10 +95,7 @@ export async function POST(request: NextRequest) {
 
   } catch (error: unknown) {
     console.error('Unhandled error in Chat API:', error);
-    let message = "Unexpected error occurred.";
-    if (error instanceof Error) {
-      message = error.message;
-    }
+    const message = error instanceof Error ? error.message : String(error);
     return NextResponse.json({ error: 'Unexpected error.', details: message }, { status: 500 });
   }
 }
